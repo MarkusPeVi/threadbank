@@ -18,7 +18,8 @@
 #include <sys/shm.h>
 #include "common.h"
 #include <sys/stat.h>
-
+#include "log.h"
+#define logfile "logfile.txt"
 pthread_t thread_pool[desk_size];       // Sevice desk threads
 pthread_mutex_t  mutex = PTHREAD_MUTEX_INITIALIZER; 
 pthread_cond_t cond_var = PTHREAD_COND_INITIALIZER;
@@ -28,6 +29,7 @@ char *master_queue = "/master_q";       // thread which writes to bank database
 int client_socket;                    // Global parm.  for new connection socket
 int que_full = 0;                // Global parm. for "master" thread to slow down service desks if its full
 mqd_t mas_que;
+static int log;
 // SERVICE DESK
 // Reads messages from its own queue, sends them to "master" to be writen on bank database
 // If "master" queue waits for master to send signal before continues
@@ -72,13 +74,19 @@ void *master(void* p){
     mattr.mq_curmsgs =0;
     mas_que = mq_open(master_queue, O_CREAT | O_RDONLY, 0644, &mattr);
     if(mas_que ==-1){
+        writeToLog(log, "Error opening master queue\n");
         perror("master_queue()");
     }
+
     char buffer[BUFSIZE];
+    memset(buffer, 0, sizeof(buffer));
+    strcpy(buffer, "All bank actions from last session underneath:\n ");
+    writeToLog(log, buffer); 	
     memset(buffer, 0, sizeof(buffer));
     int client;
     long max = mattr.mq_maxmsg;
     char sock_string[10];
+    char* exit = "exit";
     while(1){
         mq_getattr(mas_que,&mattr);
         if(mattr.mq_curmsgs >= max){      // Checks if queue full, if so tell's service desks, to pause untill queue isn't full
@@ -100,11 +108,14 @@ void *master(void* p){
             sprintf(sock_string, " %d", client);
             buffer[strlen(buffer)-1] ='\0';
             strcpy(buffer +strlen(buffer),sock_string);
-            memset(sock_string, 0, sizeof(sock_string)); 
+            memset(sock_string, 0, sizeof(sock_string));
             pthread_mutex_unlock(&mutex);
         }
-        printf("mas: %s", buffer);
         executeAction(buffer);      // Calls bankactions library to write command to bank database
+        if(strncmp(buffer, exit, strlen(exit))!= 0){
+            strcpy(buffer +strlen(buffer), "\n");
+            writeToLog(log, buffer); 	
+        }
         memset(buffer, 0, sizeof(buffer));
     }
     return NULL;
@@ -166,6 +177,7 @@ int cleanup(){
 // Runs untill users send writes "quit" on terminal
 // Cleans everything up before exit
 int  main(int agrc, char *agrv[]){
+    log = open(logfile, O_RDWR | O_APPEND | O_CREAT| O_NONBLOCK, 0777);
     struct mq_attr attr[desk_size]; // attr array for service desks creation
     char qname[200];    // buffer used for service desk queue's
     int shm_id; //shared memory id
@@ -175,15 +187,18 @@ int  main(int agrc, char *agrv[]){
     int masFd;    // Server socket
     int *sock = malloc(sizeof(int)); // pointer which is used to send servers socket to message_receiver thread
     if((shm_id = shmget(key_num, shm_size, IPC_CREAT | S_IRUSR | S_IWUSR))< 0){ //get shared memory
+        writeToLog(log, "Error shmget()\n"); 	
         perror("shmget()");
         exit(EXIT_FAILURE);
     }
     char* shm = (char*) shmat(shm_id, 0, 0);    // Pointer for shared memory
     if(shm==(char *) -1){
+        writeToLog(log, "Error shmat()\n"); 	
         perror("shmat()");
         exit(EXIT_FAILURE);
     }
     if(pthread_create(&master_thread, NULL, master, NULL)!= 0){ // creates "master" thread
+        writeToLog(log, "Error creating master thread\n"); 	
         perror("pthread_create()  ");
         exit(EXIT_FAILURE);
         }
@@ -198,6 +213,7 @@ int  main(int agrc, char *agrv[]){
         int* itmp = malloc(sizeof(int));
         *itmp = i;
         if(pthread_create(&thread_pool[i], NULL, handler, itmp)!= 0){   // Creates service desk
+        writeToLog(log, "Error creating service desk\n"); 	
             perror("pthread_create()  ");
             exit(EXIT_FAILURE);
         }

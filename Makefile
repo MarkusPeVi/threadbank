@@ -1,8 +1,8 @@
 CC = gcc
 CFLAGS = -g -D_POSIX_SOURCE -Wall -pedantic -pthread -lrt
 BINS= server client 
-OBJS= server.o common.o bankactions.o 
-OBJS2 = client.o common.o 
+OBJS= server.o common.o bankactions.o log.o 
+OBJS2 = client.o common.o log.o
 all: $(BINS)
 
 
